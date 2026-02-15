@@ -138,9 +138,12 @@ void program_exit() {
 void handle_command(const std::string &line) {
   std::istringstream iss(line);
   std::string prefix, suffix;
-  iss >> prefix >> suffix;
+
+  iss >> prefix;
 
   if (prefix == "server" || prefix == "sv") {
+    iss >> suffix;
+
     if (suffix == "on")
       server_on();
     else if (suffix == "off")
@@ -149,14 +152,29 @@ void handle_command(const std::string &line) {
       server_reboot();
     else
       std::cout << "[!] Unknown server command\n";
+
     time_sleep();
-  } else if (prefix == "broadcast" || prefix == "bt") {
-    // broadcast <file_path>
+  }
+
+  else if (prefix == "broadcast" || prefix == "bt") {
+    // 读取剩余整行
+    std::getline(iss, suffix);
+
+    // ---- 1️⃣ 去掉前导空格 ----
+    suffix.erase(0, suffix.find_first_not_of(" \t"));
+
     if (suffix.empty()) {
       std::cout << "[!] Missing file path\n";
       return;
     }
 
+    // ---- 2️⃣ 去掉首尾引号（支持 "" 和 ''）----
+    if ((suffix.front() == '"' && suffix.back() == '"') ||
+        (suffix.front() == '\'' && suffix.back() == '\'')) {
+      suffix = suffix.substr(1, suffix.size() - 2);
+    }
+
+    // ---- 3️⃣ 打开文件 ----
     std::ifstream f(suffix);
     if (!f.is_open()) {
       std::cout << "[!] Failed to open file: " << suffix << "\n";
@@ -171,8 +189,14 @@ void handle_command(const std::string &line) {
     } catch (const std::exception &e) {
       std::cout << "[ERROR] Failed to parse JSON file: " << e.what() << "\n";
     }
-  } else if (prefix == "exit") {
+  }
+
+  else if (prefix == "exit") {
     program_exit();
+  }
+
+  else {
+    std::cout << "[!] Unknown command\n";
   }
 }
 
