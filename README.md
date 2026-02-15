@@ -23,6 +23,15 @@ cd mini-wsbroad
 g++ -O2 main.cpp -lws2_32 -lpthread -o mini-wsbroad
 ```
 
+### 更新
+>
+> 进入到仓库文件夹
+
+```bash
+git pull
+./setup.sh
+```
+
 ---
 
 ## ▶️ 使用方式
