@@ -5,13 +5,23 @@
 
 ---
 
-## 🛠️ 安装与编译（Arch Linux）
-
+## 🛠️ 本地编译
+>
 > 脚本会自动处理依赖并编译可执行文件到当前目录。
 
+- ArchLinux
+
 ```bash
+cd ~/.cache
+git clone https://github.com/XiaoCRQ/mini-wsbroad 
 cd mini-wsbroad
 ./setup.sh
+```
+
+- Windows
+
+```bash
+g++ -O2 main.cpp -lws2_32 -lpthread -o mini-wsbroad
 ```
 
 ---
@@ -43,3 +53,11 @@ cd mini-wsbroad
 - `server off`   — 停止服务（保持程序运行）
 - `server reboot`— 重启服务
 - `exit`         — 停止服务并退出程序
+
+## 卸载
+
+- ArchLinux
+
+```bash
+rm ~/.local/bin/mini-wsbroad
+```

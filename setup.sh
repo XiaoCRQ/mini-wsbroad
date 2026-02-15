@@ -1,8 +1,21 @@
 #!/usr/bin/env bash
-echo "[Info] Install the required libraries..."
-sudo pacman -S websocketpp asio nlohmann-json
+
+set -e
+
+echo "[Info] Installing required libraries..."
+sudo pacman -S --needed --noconfirm websocketpp asio nlohmann-json
+
 echo "[Info] Compiling mini-wsbroad..."
 g++ -O2 main.cpp -o mini-wsbroad
-# windows
-# g++ main.cpp -std=c++17 -lws2_32 -lpthread
-echo "[Info] Installation complete"
+
+echo "[Info] Installing to ~/.local/bin..."
+mkdir -p ~/.local/bin
+cp ./mini-wsbroad ~/.local/bin/
+
+if ! echo "$PATH" | grep -q "$HOME/.local/bin"; then
+  echo "[Warning] ~/.local/bin is not in your PATH."
+  echo "Add this line to your shell config (~/.bashrc or ~/.zshrc):"
+  echo 'export PATH="$HOME/.local/bin:$PATH"'
+fi
+
+echo "[Info] Installation complete! Run 'mini-wsbroad <host> <port>' anywhere."
