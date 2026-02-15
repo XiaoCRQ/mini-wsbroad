@@ -9,7 +9,7 @@
 >
 > 脚本会自动处理依赖并编译可执行文件到当前目录。
 
-- ArchLinux
+### ArchLinux
 
 ```bash
 cd ~/.cache
@@ -18,7 +18,7 @@ cd mini-wsbroad
 ./setup.sh
 ```
 
-- Windows
+### Windows
 
 ```bash
 g++ -O2 main.cpp -lws2_32 -lpthread -o mini-wsbroad
@@ -56,8 +56,16 @@ g++ -O2 main.cpp -lws2_32 -lpthread -o mini-wsbroad
 
 ## 卸载
 
-- ArchLinux
+### ArchLinux
+
+- 删除软件
 
 ```bash
-rm ~/.local/bin/mini-wsbroad
+rm /usr/local/bin/mini-wsbroad
+```
+
+- 删除依赖库（如果使用编译安装）
+
+```bash
+sudo pacman -Rns websocketpp asio nlohmann-json
 ```
