@@ -18,16 +18,24 @@ inline void time_sleep(long time = 50) {
    ========================= */
 std::set<connection_hdl, std::owner_less<connection_hdl>> clients;
 std::mutex clients_mutex;
+std::map<connection_hdl,
+         std::chrono::steady_clock::time_point,
+         std::owner_less<connection_hdl>>
+    last_heartbeat;
 
 void on_open(connection_hdl hdl) {
   std::lock_guard<std::mutex> lock(clients_mutex);
   clients.insert(hdl);
+  last_heartbeat[hdl] = std::chrono::steady_clock::now();
   std::cout << "[+] Client connected\n";
 }
 
 void on_close(connection_hdl hdl) {
   std::lock_guard<std::mutex> lock(clients_mutex);
+
   clients.erase(hdl);
+  last_heartbeat.erase(hdl);
+
   std::cout << "[-] Client disconnected\n";
 }
 
@@ -53,12 +61,65 @@ void on_message(connection_hdl hdl, server::message_ptr msg) {
     std::string payload = msg->get_payload();
     json j = json::parse(payload);
 
+    /* ---------- 心跳 ping ---------- */
+    if (j.contains("type") && j["type"] == "ping") {
+
+      {
+        std::lock_guard<std::mutex> lock(clients_mutex);
+        last_heartbeat[hdl] = std::chrono::steady_clock::now();
+      }
+
+      json pong = {{"type", "pong"}, {"t", j.value("t", 0)}};
+
+      ws_server->send(hdl, pong.dump(), websocketpp::frame::opcode::text);
+
+      return;
+    }
+
+    /* ---------- 业务广播 ---------- */
     broadcast_json(j);
-    std::cout << "[Broadcast] Message from client broadcasted\n";
+
+    std::cout << "[Broadcast] Message broadcasted\n";
 
   } catch (const std::exception &e) {
-    std::cout << "[ERROR] Failed to parse client message: " << e.what() << "\n";
-    ws_server->send(hdl, "Invalid JSON", websocketpp::frame::opcode::text);
+    std::cout << "[ERROR] Failed to parse message: " << e.what() << "\n";
+  }
+}
+
+void heartbeat_cleaner() {
+  while (server_running.load()) {
+
+    {
+      std::lock_guard<std::mutex> lock(clients_mutex);
+
+      auto now = std::chrono::steady_clock::now();
+
+      for (auto it = clients.begin(); it != clients.end();) {
+
+        auto last = last_heartbeat[*it];
+
+        auto diff = std::chrono::duration_cast<std::chrono::seconds>(now - last)
+                        .count();
+
+        // 超过 90 秒无心跳 → 踢掉
+        if (diff > 90) {
+          std::cout << "[Heartbeat] Client timeout\n";
+
+          try {
+            ws_server->close(*it, websocketpp::close::status::normal,
+                             "Heartbeat timeout");
+          } catch (...) {
+          }
+
+          last_heartbeat.erase(*it);
+          it = clients.erase(it);
+        } else {
+          ++it;
+        }
+      }
+    }
+
+    std::this_thread::sleep_for(std::chrono::seconds(30));
   }
 }
 
@@ -86,6 +147,8 @@ void server_on() {
     server_thread = std::thread([]() {
       std::cout << "[+] Server started at ws://" << g_host << ":" << g_port
                 << "\n";
+      // 启动心跳清理线程
+      std::thread(heartbeat_cleaner).detach();
       ws_server->run();
     });
 
