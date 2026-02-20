@@ -60,7 +60,7 @@ git pull
 - 删除软件
 
 ```bash
-rm /usr/local/bin/mini-wsbroad
+sudo rm /usr/local/bin/mini-wsbroad
 ```
 
 - 删除依赖库（如果使用编译安装）
