@@ -1,293 +1,162 @@
-#include "head.h"
+#define _WEBSOCKETPP_CPP11_STANDALONE_ASIO
+#define ASIO_STANDALONE
+#include <websocketpp/config/asio_no_tls.hpp>
+#include <websocketpp/server.hpp>
 
-/* =========================
-   全局服务器对象 & 状态
-   ========================= */
-std::unique_ptr<server> ws_server;
-std::atomic<bool> server_running{false};
-std::thread server_thread;
-std::string g_host;
-uint16_t g_port;
+#include <atomic>
+#include <fstream>
+#include <iostream>
+#include <mutex>
+#include <set>
+#include <sstream>
+#include <string>
+#include <thread>
 
-inline void time_sleep(long time = 50) {
-  std::this_thread::sleep_for(std::chrono::milliseconds(time));
-}
+#include "nlohmann/json.hpp"
 
-/* =========================
-   WebSocket 回调
-   ========================= */
-std::set<connection_hdl, std::owner_less<connection_hdl>> clients;
+using json = nlohmann::json;
+using server = websocketpp::server<websocketpp::config::asio>;
+
+// -----------------------------
+// 全局状态
+// -----------------------------
+std::set<websocketpp::connection_hdl,
+         std::owner_less<websocketpp::connection_hdl>>
+    clients;
 std::mutex clients_mutex;
-std::map<connection_hdl,
-         std::chrono::steady_clock::time_point,
-         std::owner_less<connection_hdl>>
-    last_heartbeat;
+std::atomic<bool> running(true);
 
-void on_open(connection_hdl hdl) {
+// -----------------------------
+// 广播 JSON
+// -----------------------------
+void broadcastJsonFile(server &s, const std::string &filePath) {
+  std::ifstream inFile(filePath);
+  if (!inFile.is_open()) {
+    std::cout << "[ERROR] File not found: " << filePath << std::endl;
+    return;
+  }
+
+  std::stringstream buffer;
+  buffer << inFile.rdbuf();
+  std::string content = buffer.str();
+
+  json j;
+  try {
+    j = json::parse(content);
+  } catch (const std::exception &e) {
+    std::cout << "[ERROR] Invalid JSON: " << e.what() << std::endl;
+    return;
+  }
+
+  std::string data = j.dump();
+  int count = 0;
+
   std::lock_guard<std::mutex> lock(clients_mutex);
-  clients.insert(hdl);
-  last_heartbeat[hdl] = std::chrono::steady_clock::now();
-  std::cout << "[+] Client connected\n";
-}
-
-void on_close(connection_hdl hdl) {
-  std::lock_guard<std::mutex> lock(clients_mutex);
-
-  clients.erase(hdl);
-  last_heartbeat.erase(hdl);
-
-  std::cout << "[-] Client disconnected\n";
-}
-
-/* =========================
-   广播函数
-   ========================= */
-void broadcast_json(const json &msg) {
-  std::lock_guard<std::mutex> lock(clients_mutex);
-  for (auto &hdl : clients) {
+  for (auto hdl : clients) {
     try {
-      ws_server->send(hdl, msg.dump(), websocketpp::frame::opcode::text);
-    } catch (const std::exception &e) {
-      std::cout << "[ERROR] Failed to send to client: " << e.what() << "\n";
+      s.send(hdl, data, websocketpp::frame::opcode::text);
+      count++;
+    } catch (...) {
+      // ignore send errors
     }
   }
+
+  std::cout << "[WS] Broadcast complete -> " << count << " clients"
+            << std::endl;
 }
 
-/* =========================
-   客户端消息处理
-   ========================= */
-void on_message(connection_hdl hdl, server::message_ptr msg) {
-  try {
-    std::string payload = msg->get_payload();
-    json j = json::parse(payload);
+// -----------------------------
+// 命令行线程
+// -----------------------------
+void commandLoop(server &s) {
+  std::string line;
+  while (running) {
+    std::cout << ">> " << std::flush;
+    if (!std::getline(std::cin, line))
+      break;
 
-    /* ---------- 心跳 ping ---------- */
-    if (j.contains("type") && j["type"] == "ping") {
+    std::istringstream iss(line);
+    std::string cmd;
+    iss >> cmd;
 
+    if (cmd == "broadcast" || cmd == "bt") {
+      std::string filePath;
+      iss >> filePath;
+      if (filePath.empty()) {
+        std::cout << "Usage: broadcast <json_file_path>" << std::endl;
+        continue;
+      }
+      broadcastJsonFile(s, filePath);
+    } else if (cmd == "status") {
+      std::lock_guard<std::mutex> lock(clients_mutex);
+      std::cout << "[WS] Connected clients: " << clients.size() << std::endl;
+    } else if (cmd == "exit") {
+      std::cout << "[WS] Shutting down server..." << std::endl;
+
+      // 断开所有客户端
       {
         std::lock_guard<std::mutex> lock(clients_mutex);
-        last_heartbeat[hdl] = std::chrono::steady_clock::now();
-      }
-
-      json pong = {{"type", "pong"}, {"t", j.value("t", 0)}};
-
-      ws_server->send(hdl, pong.dump(), websocketpp::frame::opcode::text);
-
-      return;
-    }
-
-    /* ---------- 业务广播 ---------- */
-    broadcast_json(j);
-
-    std::cout << "[Broadcast] Message broadcasted\n";
-
-  } catch (const std::exception &e) {
-    std::cout << "[ERROR] Failed to parse message: " << e.what() << "\n";
-  }
-}
-
-void heartbeat_cleaner() {
-  while (server_running.load()) {
-
-    {
-      std::lock_guard<std::mutex> lock(clients_mutex);
-
-      auto now = std::chrono::steady_clock::now();
-
-      for (auto it = clients.begin(); it != clients.end();) {
-
-        auto last = last_heartbeat[*it];
-
-        auto diff = std::chrono::duration_cast<std::chrono::seconds>(now - last)
-                        .count();
-
-        // 超过 90 秒无心跳 → 踢掉
-        if (diff > 90) {
-          std::cout << "[Heartbeat] Client timeout\n";
-
+        for (auto hdl : clients) {
           try {
-            ws_server->close(*it, websocketpp::close::status::normal,
-                             "Heartbeat timeout");
+            s.close(hdl, websocketpp::close::status::going_away, "Server exit");
           } catch (...) {
           }
-
-          last_heartbeat.erase(*it);
-          it = clients.erase(it);
-        } else {
-          ++it;
         }
       }
-    }
 
-    std::this_thread::sleep_for(std::chrono::seconds(30));
-  }
-}
-
-/* =========================
-   服务器控制函数
-   ========================= */
-void server_on() {
-  if (server_running.load()) {
-    std::cout << "[!] Server already running\n";
-    return;
-  }
-
-  try {
-    ws_server = std::make_unique<server>();
-    ws_server->init_asio();
-    ws_server->set_reuse_addr(true);
-    ws_server->set_open_handler(&on_open);
-    ws_server->set_close_handler(&on_close);
-    ws_server->set_message_handler(&on_message);
-
-    asio::ip::tcp::endpoint ep(asio::ip::make_address(g_host), g_port);
-    ws_server->listen(ep);
-    ws_server->start_accept();
-
-    server_thread = std::thread([]() {
-      std::cout << "[+] Server started at ws://" << g_host << ":" << g_port
-                << "\n";
-      // 启动心跳清理线程
-      std::thread(heartbeat_cleaner).detach();
-      ws_server->run();
-    });
-
-    server_running.store(true);
-  } catch (const std::exception &e) {
-    std::cout << "[ERROR] Failed to start server: " << e.what() << "\n";
-  }
-}
-
-void server_off() {
-  if (!server_running.load()) {
-    std::cout << "[!] Server not running\n";
-    return;
-  }
-
-  try {
-    ws_server->stop_listening();
-    ws_server->stop();
-
-    if (server_thread.joinable())
-      server_thread.join();
-
-    ws_server.reset();
-    server_running.store(false);
-
-    std::cout << "[-] Server stopped\n";
-  } catch (const std::exception &e) {
-    std::cout << "[ERROR] Failed to stop server: " << e.what() << "\n";
-  }
-}
-
-void server_reboot() {
-  std::cout << "[*] Rebooting server...\n";
-  if (server_running.load())
-    server_off();
-  time_sleep();
-  server_on();
-}
-
-void program_exit() {
-  std::cout << "[*] Exiting...\n";
-  if (server_running.load())
-    server_off();
-  exit(0);
-}
-
-/* =========================
-   指令处理模块
-   ========================= */
-void handle_command(const std::string &line) {
-  std::istringstream iss(line);
-  std::string prefix, suffix;
-
-  iss >> prefix;
-
-  if (prefix == "server" || prefix == "sv") {
-    iss >> suffix;
-
-    if (suffix == "on")
-      server_on();
-    else if (suffix == "off")
-      server_off();
-    else if (suffix == "reboot" || suffix == "rb")
-      server_reboot();
-    else
-      std::cout << "[!] Unknown server command\n";
-
-    time_sleep();
-  }
-
-  else if (prefix == "broadcast" || prefix == "bt") {
-    // 读取剩余整行
-    std::getline(iss, suffix);
-
-    // ---- 1️⃣ 去掉前导空格 ----
-    suffix.erase(0, suffix.find_first_not_of(" \t"));
-
-    if (suffix.empty()) {
-      std::cout << "[!] Missing file path\n";
-      return;
-    }
-
-    // ---- 2️⃣ 去掉首尾引号（支持 "" 和 ''）----
-    if ((suffix.front() == '"' && suffix.back() == '"') ||
-        (suffix.front() == '\'' && suffix.back() == '\'')) {
-      suffix = suffix.substr(1, suffix.size() - 2);
-    }
-
-    // ---- 3️⃣ 打开文件 ----
-    std::ifstream f(suffix);
-    if (!f.is_open()) {
-      std::cout << "[!] Failed to open file: " << suffix << "\n";
-      return;
-    }
-
-    try {
-      json j;
-      f >> j;
-      broadcast_json(j);
-      std::cout << "[Broadcast] Broadcasted JSON from file: " << suffix << "\n";
-    } catch (const std::exception &e) {
-      std::cout << "[ERROR] Failed to parse JSON file: " << e.what() << "\n";
+      running = false;
+      s.stop_listening();
+      break;
     }
   }
-
-  else if (prefix == "exit") {
-    program_exit();
-  }
-
-  else {
-    std::cout << "[!] Unknown command\n";
-  }
 }
 
-/* =========================
-   主函数
-   ========================= */
-int main(int argc, char *argv[]) {
-  if (argc != 3) {
-    std::cout << "Usage: " << argv[0] << " <host> <port>\n";
+// -----------------------------
+// 主函数
+// -----------------------------
+int main(int argc, char **argv) {
+  if (argc < 3) {
+    std::cout << "Usage: " << argv[0] << " <host> <port>" << std::endl;
     return 1;
   }
 
-  g_host = argv[1];
-  g_port = static_cast<uint16_t>(std::stoi(argv[2]));
+  std::string host = argv[1];
+  int port = std::stoi(argv[2]);
 
-  std::cout << "WebSocket Control Console\n";
-  std::cout << "Commands:\n";
-  std::cout << "  server/sv on/off/reboot\n";
-  std::cout << "  broadcast/bt <file_path>\n";
-  std::cout << "  exit\n\n";
+  server ws_server;
 
-  std::string line;
-  while (true) {
-    std::cout << ">> ";
-    if (!std::getline(std::cin, line))
-      break;
-    handle_command(line);
-  }
+  // 屏蔽 websocketpp 日志输出
+  ws_server.clear_access_channels(websocketpp::log::alevel::all);
+  ws_server.clear_error_channels(websocketpp::log::elevel::all);
 
-  program_exit();
+  ws_server.set_reuse_addr(true);
+  ws_server.init_asio();
+
+  ws_server.set_open_handler([&](websocketpp::connection_hdl hdl) {
+    std::lock_guard<std::mutex> lock(clients_mutex);
+    clients.insert(hdl);
+    // 仅 std::cout 输出，其他屏蔽
+    std::cout << "[WS] Client connected" << std::endl;
+    std::cout << ">> " << std::flush;
+  });
+
+  ws_server.set_close_handler([&](websocketpp::connection_hdl hdl) {
+    std::lock_guard<std::mutex> lock(clients_mutex);
+    clients.erase(hdl);
+    std::cout << "[WS] Client disconnected" << std::endl;
+  });
+
+  ws_server.listen(port);
+  ws_server.start_accept();
+
+  std::cout << "[WS] Server listening on " << host << ":" << port << std::endl;
+
+  std::thread cmdThread(commandLoop, std::ref(ws_server));
+
+  // 运行事件循环
+  ws_server.run();
+
+  cmdThread.join();
+  std::cout << "[WS] Server exited" << std::endl;
+  return 0;
 }

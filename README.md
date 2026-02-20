@@ -48,9 +48,7 @@ git pull
 ## 🖥️ 内置控制命令（通过标准输入）
 
 - `broadcast/bt <file_path>` — 广播文件
-- `server/sv on`    — 启动服务
-- `server/sv off`   — 停止服务
-- `server/sv reboot`— 重启服务
+- `status`       — 当前连接数
 - `exit`         — 停止服务并退出程序
 
 ## 卸载
