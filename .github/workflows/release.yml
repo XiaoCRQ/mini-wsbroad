@@ -12,7 +12,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-20.04  # 使用旧版 Ubuntu 以获得更好的 GLIBC 兼容性
+          - os: ubuntu-latest
             out_name: mini-wsbroad-linux
           - os: windows-latest
             out_name: mini-wsbroad-windows.exe
@@ -25,12 +25,13 @@ jobs:
 
       - name: Install Dependencies (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libasio-dev
+        run: sudo apt-get update && sudo apt-get install -y libasio-dev build-essential
 
       - name: Configure and Build
         shell: bash
         run: |
-          # 针对 Windows 的宏冲突，CMake 命令行不再重复定义，交由 CMakeLists 处理
+          # 针对 Windows 警告，修改代码去掉重复定义（或者 CMake 里处理）
+          # 这里直接编译
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build --config Release
 
@@ -38,12 +39,10 @@ jobs:
         shell: bash
         run: |
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            cp build/Release/mini-wsbroad.exe ./${{ matrix.out_name }}
-          elif [ "${{ matrix.os }}" = "macos-latest" ]; then
-            cp build/mini-wsbroad ./${{ matrix.out_name }}
+            # 兼容 MSVC 目录结构
+            mv build/Release/mini-wsbroad.exe ${{ matrix.out_name }}
           else
-            # Linux 编译出后重命名
-            cp build/mini-wsbroad ./${{ matrix.out_name }}
+            mv build/mini-wsbroad ${{ matrix.out_name }}
           fi
 
       - name: Upload to Job
@@ -66,8 +65,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest-build
-          name: "Latest Pre-release"
-          body: "Auto-updated build: ${{ github.event.head_commit.message }}"
+          name: "Latest Pre-release (${{ github.sha }})"
+          body: "Auto-build for multiple platforms. This version is a static/semi-static build for maximum compatibility."
           prerelease: true
           make_latest: true
           files: |
