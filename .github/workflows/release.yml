@@ -2,18 +2,20 @@ name: Continuous Release
 
 on:
   push:
-    branches:
-      - main  # 只要 push 到 main 分支就触发
+    branches: [ main ]
 
 jobs:
   build:
     name: Build on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+    # 针对 Linux 使用 ArchLinux 容器
+    container: ${{ matrix.container }}
     strategy:
+      fail-fast: false # 即使一个平台失败，其他平台继续运行
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
         include:
           - os: ubuntu-latest
+            container: archlinux:latest
             out_name: mini-wsbroad-linux
           - os: windows-latest
             out_name: mini-wsbroad-windows.exe
@@ -21,18 +23,18 @@ jobs:
             out_name: mini-wsbroad-macos
 
     steps:
+      - name: Install Dependencies (Arch Linux)
+        if: contains(matrix.container, 'archlinux')
+        run: pacman -Syu --noconfirm cmake gcc make git
+
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install Dependencies (Linux)
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libasio-dev
-
-      - name: Configure CMake
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-
-      - name: Build
-        run: cmake --build build --config Release
+      - name: Configure and Build
+        shell: bash
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --config Release
 
       - name: Prepare Artifact
         shell: bash
@@ -40,10 +42,11 @@ jobs:
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
             mv build/Release/mini-wsbroad.exe ${{ matrix.out_name }}
           else
-            mv build/mini-wsbroad ${{ matrix.out_name }}
+            # Linux 容器或 macOS 下路径稍有不同
+            [ -f build/mini-wsbroad ] && mv build/mini-wsbroad ${{ matrix.out_name }} || mv build/Release/mini-wsbroad ${{ matrix.out_name }}
           fi
 
-      - name: Upload Artifacts to Job
+      - name: Upload to Job
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.out_name }}
@@ -52,23 +55,21 @@ jobs:
   publish:
     needs: build
     runs-on: ubuntu-latest
+    permissions: write-all # 确保有权限写 Release
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           merge-multiple: true
 
-      - name: Generate Tag Name
-        id: tag
-        run: echo "tag_name=v$(date +'%Y%m%d%H%M%S')" >> $GITHUB_OUTPUT
-
       - name: Create or Update Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: latest-build  # 固定使用这个 tag 名实现覆盖
-          name: "Pre-release (Updated: $(date +'%Y-%m-%d %H:%M'))"
-          body: "Auto-generated build from latest push."
+          tag_name: latest-build
+          name: "Latest Pre-release (${{ github.sha }})"
+          body: "Build Time: ${{ github.event.head_commit.timestamp }}\nCommit: ${{ github.sha }}"
           prerelease: true
+          make_latest: true
           files: |
             mini-wsbroad-linux
             mini-wsbroad-windows.exe
