@@ -1,9 +1,3 @@
-#ifndef ASIO_STANDALONE
-#define ASIO_STANDALONE
-#endif
-#ifndef _WEBSOCKETPP_CPP11_STANDALONE_ASIO
-#define _WEBSOCKETPP_CPP11_STANDALONE_ASIO
-#endif
 #include <websocketpp/config/asio_no_tls.hpp>
 #include <websocketpp/server.hpp>
 

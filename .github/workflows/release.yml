@@ -23,15 +23,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install Dependencies (Linux)
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libasio-dev build-essential
-
       - name: Configure and Build
         shell: bash
         run: |
-          # 针对 Windows 警告，修改代码去掉重复定义（或者 CMake 里处理）
-          # 这里直接编译
+          # 无论什么平台，统一使用标准 CMake 命令
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build --config Release
 
@@ -39,13 +34,14 @@ jobs:
         shell: bash
         run: |
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            # 兼容 MSVC 目录结构
+            # MSVC 产物在 Release 子目录
             mv build/Release/mini-wsbroad.exe ${{ matrix.out_name }}
           else
+            # Linux/macOS 产物直接在 build 目录
             mv build/mini-wsbroad ${{ matrix.out_name }}
           fi
 
-      - name: Upload to Job
+      - name: Upload
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.out_name }}
@@ -56,7 +52,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions: write-all
     steps:
-      - name: Download all artifacts
+      - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
           merge-multiple: true
@@ -65,8 +61,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest-build
-          name: "Latest Pre-release (${{ github.sha }})"
-          body: "Auto-build for multiple platforms. This version is a static/semi-static build for maximum compatibility."
+          name: "Latest Pre-release"
+          body: "Auto-build at $(date)"
           prerelease: true
           make_latest: true
           files: |
