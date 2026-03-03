@@ -1,0 +1,77 @@
+name: Continuous Release
+
+on:
+  push:
+    branches:
+      - main  # 只要 push 到 main 分支就触发
+
+jobs:
+  build:
+    name: Build on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        include:
+          - os: ubuntu-latest
+            out_name: mini-wsbroad-linux
+          - os: windows-latest
+            out_name: mini-wsbroad-windows.exe
+          - os: macos-latest
+            out_name: mini-wsbroad-macos
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasio-dev
+
+      - name: Configure CMake
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Prepare Artifact
+        shell: bash
+        run: |
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            mv build/Release/mini-wsbroad.exe ${{ matrix.out_name }}
+          else
+            mv build/mini-wsbroad ${{ matrix.out_name }}
+          fi
+
+      - name: Upload Artifacts to Job
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.out_name }}
+          path: ${{ matrix.out_name }}
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: Generate Tag Name
+        id: tag
+        run: echo "tag_name=v$(date +'%Y%m%d%H%M%S')" >> $GITHUB_OUTPUT
+
+      - name: Create or Update Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest-build  # 固定使用这个 tag 名实现覆盖
+          name: "Pre-release (Updated: $(date +'%Y-%m-%d %H:%M'))"
+          body: "Auto-generated build from latest push."
+          prerelease: true
+          files: |
+            mini-wsbroad-linux
+            mini-wsbroad-windows.exe
+            mini-wsbroad-macos
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
